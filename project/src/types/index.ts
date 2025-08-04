@@ -1,3 +1,19 @@
+// Platform presets for reframing and cropping
+export interface PlatformPreset {
+  name: string;
+  aspect: string;
+  scale: string;
+}
+
+export const PLATFORM_PRESETS: PlatformPreset[] = [
+  { name: 'YouTube', aspect: '16:9', scale: '1280:720' },
+  { name: 'Instagram Story', aspect: '9:16', scale: '720:1280' },
+  { name: 'Instagram Feed', aspect: '1:1', scale: '720:720' },
+  { name: 'TikTok', aspect: '9:16', scale: '720:1280' },
+  { name: 'LinkedIn', aspect: '16:9', scale: '1280:720' },
+  { name: 'Twitter Square', aspect: '1:1', scale: '720:720' },
+  { name: 'Twitter Wide', aspect: '16:9', scale: '1280:720' },
+];
 export interface User {
   id: string;
   email: string;

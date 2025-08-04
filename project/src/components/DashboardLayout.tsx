@@ -22,11 +22,7 @@ const navSections = [
   },
 ];
 
-const stats = [
-  { label: 'Clips Created', value: 128, icon: <Film className="h-6 w-6 text-blue-600" /> },
-  { label: 'Storage Used', value: '2.3 GB', icon: <Database className="h-6 w-6 text-blue-600" /> },
-  { label: 'Processing Time', value: '4h 12m', icon: <Clock className="h-6 w-6 text-blue-600" /> },
-];
+// stats will be dynamic now
 
 // uploads will be dynamic now
 
@@ -60,8 +56,16 @@ const QuickActions: React.FC<QuickActionsProps> = ({ onUploadClick }) => (
   </div>
 );
 
-const UsageStats = () => (
-  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+interface Stat {
+  label: string;
+  value: string | number;
+  icon: React.ReactNode;
+}
+type UsageStatsProps = {
+  stats: Stat[];
+};
+const UsageStats: React.FC<UsageStatsProps> = ({ stats }) => (
+  <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
     {stats.map((stat) => (
       <div key={stat.label} className="bg-white dark:bg-gray-950 rounded-xl shadow-sm p-6 flex items-center space-x-4">
         <div>{stat.icon}</div>
@@ -147,6 +151,16 @@ interface DashboardLayoutProps {
 
 const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) => {
   const [uploads, setUploads] = useState<UploadFile[]>([]);
+  // Dynamic dashboard stats
+  const totalProcessingTime = uploads.reduce((sum, item) => sum + (item.metadata?.duration || 0), 0);
+  const processingCount = uploads.filter(item => item.status === 'processing').length;
+  const storageUsed = uploads.reduce((sum, item) => sum + (item.file.size || 0), 0);
+  const stats = [
+    { label: 'Clips Created', value: uploads.length, icon: <Film className="h-6 w-6 text-blue-600" /> },
+    { label: 'Storage Used', value: `${(storageUsed / (1024 * 1024 * 1024)).toFixed(2)} GB`, icon: <Database className="h-6 w-6 text-blue-600" /> },
+    { label: 'Processing Time', value: `${Math.floor(totalProcessingTime / 60)}m ${Math.round(totalProcessingTime % 60)}s`, icon: <Clock className="h-6 w-6 text-blue-600" /> },
+    { label: 'Processing', value: `${processingCount} video${processingCount !== 1 ? 's' : ''}`, icon: <Loader2 className="h-6 w-6 text-yellow-500 animate-spin" /> },
+  ];
   const [showToast, setShowToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -224,7 +238,7 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) => {
         onChange={e => handleFileUpload(Array.from(e.target.files || []))}
       />
       <main className="flex-1 flex flex-col p-4 md:p-8 space-y-8">
-        <UsageStats />
+        <UsageStats stats={stats} />
         <RecentUploads uploads={uploads} />
         {/* Upload Queue UI */}
         {uploads.length > 0 && (

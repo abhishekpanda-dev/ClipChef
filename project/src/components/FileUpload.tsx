@@ -1,4 +1,8 @@
 import React, { useState, useRef } from 'react';
+import ProgressCircle from './ProgressCircle';
+import { XCircle } from 'lucide-react';
+import { useVideoProcessor } from '../hooks/useVideoProcessor';
+import { VideoMetadata } from '../utils/VideoProcessor';
 import { Upload, File, X, RefreshCw, Image } from 'lucide-react';
 
 interface FileUploadProps {
@@ -10,10 +14,13 @@ const MAX_SIZE_MB = 500;
 
 export interface UploadFile {
   file: File;
-  status: 'queued' | 'uploading' | 'completed' | 'failed';
+  status: 'queued' | 'uploading' | 'processing' | 'completed' | 'failed';
   progress: number;
   error?: string;
+  processingProgress?: number; // 0-100
   preview?: string;
+  metadata?: VideoMetadata;
+  thumbnail?: string;
 }
 
 const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
@@ -21,6 +28,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
   const [uploadQueue, setUploadQueue] = useState<UploadFile[]>([]);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { getMetadata, generateThumbnail } = useVideoProcessor();
+  const [toast, setToast] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
 
   const validateFile = (file: File): string | null => {
     const ext = file.name.split('.').pop()?.toLowerCase();
@@ -112,15 +121,61 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
       if (progress >= 100) {
         clearInterval(interval);
         // Randomly fail some uploads for demo
-        setUploadQueue(prev => prev.map((item, i) =>
-          i === index
-            ? Math.random() < 0.85
-              ? { ...item, status: 'completed', progress: 100 }
-              : { ...item, status: 'failed', error: 'Upload failed. Please retry.' }
-            : item
-        ));
+        const success = Math.random() < 0.85;
+        if (success) {
+          setUploadQueue(prev => prev.map((item, i) =>
+            i === index
+              ? { ...item, status: 'processing', progress: 100 }
+              : item
+          ));
+          // Trigger video processing (metadata + thumbnail)
+          processVideo(index);
+        } else {
+          setUploadQueue(prev => prev.map((item, i) =>
+            i === index
+              ? { ...item, status: 'failed', error: 'Upload failed. Please retry.' }
+              : item
+          ));
+        }
       }
     }, 400);
+  };
+
+  // Video processing after upload
+  const processVideo = async (index: number) => {
+    setUploadQueue(prev => prev.map((item, i) =>
+      i === index ? { ...item, status: 'processing', error: undefined, processingProgress: 0 } : item
+    ));
+    try {
+      const file = uploadQueue[index].file;
+      // Simulate progress for demo (replace with real progress from ffmpeg.wasm if available)
+      for (let p = 0; p <= 100; p += 10) {
+        await new Promise(res => setTimeout(res, 100));
+        setUploadQueue(prev => prev.map((item, i) =>
+          i === index ? { ...item, processingProgress: p } : item
+        ));
+      }
+      const metadata = await getMetadata(file);
+      const thumb = await generateThumbnail(file, Math.floor((metadata.duration || 1) / 2));
+      setUploadQueue(prev => prev.map((item, i) =>
+        i === index
+          ? {
+              ...item,
+              metadata,
+              thumbnail: thumb.url,
+              status: 'completed',
+              processingProgress: 100,
+            }
+          : item
+      ));
+    } catch (err) {
+      setUploadQueue(prev => prev.map((item, i) =>
+        i === index
+          ? { ...item, status: 'failed', error: 'Processing failed. Please retry.', processingProgress: 0 }
+          : item
+      ));
+      setToast({ message: 'Processing failed. Please retry.', type: 'error' });
+    }
   };
 
   const formatFileSize = (bytes: number) => {
@@ -182,7 +237,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
           {uploadQueue.map((item, index) => (
             <div key={index} className="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
               <div className="flex items-center space-x-3">
-                {item.preview ? (
+                {item.thumbnail ? (
+                  <img src={item.thumbnail} alt="thumbnail" className="h-10 w-16 object-cover rounded" />
+                ) : item.preview ? (
                   <img src={item.preview} alt="preview" className="h-10 w-16 object-cover rounded" />
                 ) : (
                   <Image className="h-10 w-10 text-gray-300" />
@@ -190,8 +247,26 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
                 <div>
                   <p className="text-sm font-medium text-gray-900">{item.file.name}</p>
                   <p className="text-xs text-gray-500">{formatFileSize(item.file.size)}</p>
-                  {item.error && (
-                    <p className="text-xs text-red-500 mt-1">{item.error}</p>
+                  {item.metadata && (
+                    <p className="text-xs text-blue-500 mt-1">
+                      {`Duration: ${item.metadata.duration}s | ${item.metadata.width}x${item.metadata.height} | FPS: ${item.metadata.framerate}`}
+                    </p>
+                  )}
+                  {item.status === 'processing' && (
+                    <div className="flex flex-col items-center mt-2">
+                      <ProgressCircle progress={item.processingProgress ?? 0} />
+                      <span className="text-xs text-blue-600 mt-1">Processing… {item.processingProgress ?? 0}%</span>
+                    </div>
+                  )}
+                  {item.status === 'failed' && (
+                    <div className="flex flex-col items-center mt-2">
+                      <XCircle className="h-6 w-6 text-red-500 mb-1" />
+                      <span className="text-xs text-red-600">{item.error}</span>
+                      <button
+                        onClick={() => processVideo(index)}
+                        className="mt-1 px-2 py-1 bg-yellow-500 text-white rounded text-xs hover:bg-yellow-600"
+                      >Retry</button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -224,14 +299,22 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
           ))}
           <button
             onClick={handleUpload}
-            className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition-colors duration-200 font-medium"
-            disabled={uploadQueue.every(item => item.status !== 'queued')}
+            className={`w-full py-3 rounded-lg font-medium transition-colors duration-200 ${uploadQueue.some(item => item.status === 'processing') ? 'bg-gray-400 text-gray-200 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+            disabled={uploadQueue.some(item => item.status === 'processing') || uploadQueue.every(item => item.status !== 'queued')}
           >
-            Start Upload ({uploadQueue.filter(item => item.status === 'queued').length} file{uploadQueue.filter(item => item.status === 'queued').length !== 1 ? 's' : ''})
+            {uploadQueue.some(item => item.status === 'processing')
+              ? 'Processing… Please wait'
+              : `Start Upload (${uploadQueue.filter(item => item.status === 'queued').length} file${uploadQueue.filter(item => item.status === 'queued').length !== 1 ? 's' : ''})`}
           </button>
         </div>
       )}
-    </div>
+    {/* Toast for error messages */}
+    {toast && (
+      <div className={`fixed bottom-6 right-6 z-50 px-4 py-2 rounded shadow-lg text-white ${toast.type === 'error' ? 'bg-red-600' : 'bg-green-600'}`}>
+        {toast.message}
+      </div>
+    )}
+  </div>
   );
 };
 
