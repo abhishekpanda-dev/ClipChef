@@ -1,0 +1,20 @@
+{
+  "dependencies": {
+    "lucide-react": "^0.536.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@babel/preset-env": "^7.28.0",
+    "@babel/preset-react": "^7.27.1",
+    "@babel/preset-typescript": "^7.27.1",
+    "@testing-library/jest-dom": "^6.6.4",
+    "@testing-library/react": "^16.3.0",
+    "@types/jest": "^30.0.0",
+    "@types/react": "^19.1.9",
+    "@types/react-dom": "^19.1.7",
+    "babel-jest": "^30.0.5",
+    "jest": "^30.0.5",
+    "ts-jest": "^29.4.1"
+  }
+}
