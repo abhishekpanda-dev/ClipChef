@@ -1,5 +1,5 @@
 // Comprehensive SceneDetector class for advanced scene boundary detection
-// import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { FFmpeg } from '@ffmpeg/ffmpeg';
 
 export interface SceneDetectionResult {
   timestamp: number;

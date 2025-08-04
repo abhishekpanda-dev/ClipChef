@@ -1,8 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import FileUpload, { ACCEPTED_FORMATS, UploadFile } from './FileUpload';
+import UploadQueueItem from './UploadQueueItem';
 // Toast import should match your actual Toast component signature
 // Example: import Toast from './Toast';
 import { Menu, ChevronDown, ChevronRight, Plus, Upload, Library, Film, Database, Clock, CheckCircle, Loader2, XCircle } from 'lucide-react';
+import { useVideoProcessor } from '../hooks/useVideoProcessor';
 
 const navSections = [
   {
@@ -151,6 +153,10 @@ interface DashboardLayoutProps {
 
 const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) => {
   const [uploads, setUploads] = useState<UploadFile[]>([]);
+  const [processing, setProcessing] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const { process } = useVideoProcessor();
+  
   // Dynamic dashboard stats
   const totalProcessingTime = uploads.reduce((sum, item) => sum + (item.metadata?.duration || 0), 0);
   const processingCount = uploads.filter(item => item.status === 'processing').length;
@@ -164,24 +170,101 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) => {
   const [showToast, setShowToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Add Web Worker message listener for debugging
+  useEffect(() => {
+    const worker = new Worker(new URL('../workers/videoProcessor.worker.ts', import.meta.url));
+    
+    worker.onmessage = (e) => {
+      console.log('Dashboard: Web Worker message received:', e.data);
+      
+      const { type, progress, context, error: workerError } = e.data;
+      
+      switch (type) {
+        case 'start':
+          console.log('Dashboard: Processing started for context:', context);
+          setProcessing(true);
+          setError(null);
+          // Update the first processing item to show it's started
+          setUploads(prev => prev.map(item => 
+            item.status === 'queued' 
+              ? { ...item, status: 'processing', processingProgress: 0 }
+              : item
+          ));
+          break;
+        case 'progress':
+          console.log('Dashboard: Progress update:', progress, 'Context:', context);
+          // Update progress for the specific file being processed
+          setUploads(prev => prev.map(item => 
+            item.status === 'processing' 
+              ? { ...item, processingProgress: progress }
+              : item
+          ));
+          break;
+        case 'complete':
+          console.log('Dashboard: Processing completed for context:', context);
+          setProcessing(false);
+          setUploads(prev => prev.map(item => 
+            item.status === 'processing' 
+              ? { ...item, status: 'completed', processingProgress: 100 }
+              : item
+          ));
+          break;
+        case 'error':
+          console.error('Dashboard: Worker error:', workerError);
+          setError(workerError);
+          setProcessing(false);
+          setUploads(prev => prev.map(item => 
+            item.status === 'processing' 
+              ? { ...item, status: 'failed', error: workerError }
+              : item
+          ));
+          break;
+        default:
+          console.log('Dashboard: Unknown message type:', type);
+      }
+    };
+
+    worker.onerror = (e) => {
+      console.error('Dashboard: Web Worker error:', e);
+      setError('Web Worker error occurred');
+      setProcessing(false);
+    };
+
+    return () => {
+      worker.terminate();
+    };
+  }, []);
+
   // Handler for file selection
   const handleFileUpload = async (files: File[]) => {
+    console.log('Dashboard: handleFileUpload called with files:', files.map(f => ({ name: f.name, size: f.size, type: f.type })));
+    
     // Validate and process files using FileUpload logic
     const newQueue: UploadFile[] = [];
     for (const file of files) {
+      console.log('Dashboard: Processing file:', file.name);
+      
       const ext = file.name.split('.').pop()?.toLowerCase();
       if (!ext || !ACCEPTED_FORMATS.includes(ext)) {
+        console.error('Dashboard: Unsupported format:', ext);
         setShowToast({ message: `Unsupported format: .${ext}`, type: 'error' });
         continue;
       }
       if (file.size > 500 * 1024 * 1024) {
+        console.error('Dashboard: File too large:', file.size);
         setShowToast({ message: `File too large (max 500MB)`, type: 'error' });
         continue;
       }
+      
       const preview = file.type.startsWith('video/') ? URL.createObjectURL(file) : undefined;
-      newQueue.push({ file, status: 'queued', progress: 0, preview });
+      const uploadItem = { file, status: 'queued' as const, progress: 0, preview };
+      newQueue.push(uploadItem);
+      
+      console.log('Dashboard: Added file to queue:', uploadItem);
     }
+    
     if (newQueue.length > 0) {
+      console.log('Dashboard: Adding files to uploads state:', newQueue.length, 'files');
       setUploads(prev => [...prev, ...newQueue]);
       setShowToast({ message: `${newQueue.length} file(s) added to upload queue.`, type: 'success' });
     }
@@ -189,7 +272,78 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) => {
 
   // Handler for Upload Video button
   const handleUploadButtonClick = () => {
+    console.log('Dashboard: Upload button clicked');
     fileInputRef.current?.click();
+  };
+
+  // Updated file input onChange handler to ensure proper processing
+  const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    console.log('Dashboard: File input onChange triggered');
+    const files = Array.from(e.target.files || []);
+    console.log('Dashboard: Files selected from input:', files.length);
+    
+    if (files.length > 0) {
+      await handleFileUpload(files);
+      
+      // Process each file with videoProcessor
+      for (const file of files) {
+        try {
+          console.log('Dashboard: Starting video processing for:', file.name);
+          setUploads(prev => prev.map(item => 
+            item.file === file ? { ...item, status: 'processing', processingProgress: 0 } : item
+          ));
+          
+          // Call videoProcessor.process and await its promise
+          const result = await process(file);
+          console.log('Dashboard: Video processing completed for:', file.name, result);
+          
+          setUploads(prev => prev.map(item => 
+            item.file === file ? { 
+              ...item, 
+              status: 'completed', 
+              processingProgress: 100,
+              metadata: result.metadata,
+              thumbnail: result.thumbnail.url
+            } : item
+          ));
+        } catch (error) {
+          console.error('Dashboard: Video processing failed for:', file.name, error);
+          setUploads(prev => prev.map(item => 
+            item.file === file ? { ...item, status: 'failed', error: error instanceof Error ? error.message : String(error) } : item
+          ));
+        }
+      }
+    }
+    
+    // Clear the input
+    e.target.value = '';
+  };
+
+  // Handler for progress updates
+  const handleProgressUpdate = (index: number, progress: number) => {
+    console.log('Dashboard: Progress update for index:', index, 'progress:', progress);
+    setUploads(prev => prev.map((item, i) => 
+      i === index ? { ...item, processingProgress: progress } : item
+    ));
+  };
+
+  // Handler for status updates
+  const handleStatusUpdate = (index: number, status: UploadFile['status'], error?: string) => {
+    console.log('Dashboard: Status update for index:', index, 'status:', status, 'error:', error);
+    setUploads(prev => prev.map((item, i) => 
+      i === index ? { ...item, status, error } : item
+    ));
+  };
+
+  // Retry and cancel logic
+  const handleRetry = (index: number) => {
+    console.log('Dashboard: Retry requested for index:', index);
+    setUploads(prev => prev.map((item, i) => i === index ? { ...item, status: 'queued', error: undefined, progress: 0 } : item));
+  };
+  
+  const handleCancel = (index: number) => {
+    console.log('Dashboard: Cancel requested for index:', index);
+    setUploads(prev => prev.filter((_, i) => i !== index));
   };
 
   // Simulate upload progress for demo
@@ -218,14 +372,6 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) => {
     });
   };
 
-  // Retry and cancel logic
-  const handleRetry = (index: number) => {
-    setUploads(prev => prev.map((item, i) => i === index ? { ...item, status: 'queued', error: undefined, progress: 0 } : item));
-  };
-  const handleCancel = (index: number) => {
-    setUploads(prev => prev.filter((_, i) => i !== index));
-  };
-
   return (
     <div className="min-h-screen flex flex-col md:flex-row bg-gray-50 dark:bg-gray-900 transition-colors">
       <Sidebar onUploadClick={handleUploadButtonClick} />
@@ -235,64 +381,36 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) => {
         multiple
         accept={ACCEPTED_FORMATS.map(f => '.' + f).join(',')}
         className="hidden"
-        onChange={e => handleFileUpload(Array.from(e.target.files || []))}
+        onChange={handleFileInputChange}
       />
       <main className="flex-1 flex flex-col p-4 md:p-8 space-y-8">
         <UsageStats stats={stats} />
         <RecentUploads uploads={uploads} />
         {/* Upload Queue UI */}
         {uploads.length > 0 && (
-          <div className="space-y-2">
-            <h4 className="font-medium text-gray-900">Upload Queue:</h4>
-            {uploads.map((item, index) => (
-              <div key={index} className="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
-                <div className="flex items-center space-x-3">
-                  {item.preview ? (
-                    <img src={item.preview} alt="preview" className="h-10 w-16 object-cover rounded" />
-                  ) : (
-                    <div className="h-10 w-16 bg-gray-200 rounded flex items-center justify-center text-gray-400">No Preview</div>
-                  )}
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{item.file.name}</p>
-                    <p className="text-xs text-gray-500">{(item.file.size / (1024 * 1024)).toFixed(2)} MB</p>
-                    {item.error && (
-                      <p className="text-xs text-red-500 mt-1">{item.error}</p>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center space-x-2">
-                  {item.status === 'uploading' && (
-                    <div className="w-32 bg-gray-200 rounded-full h-2 mr-2">
-                      <div
-                        className="bg-blue-600 h-2 rounded-full"
-                        style={{ width: `${item.progress}%` }}
-                      />
-                    </div>
-                  )}
-                  {item.status === 'failed' && (
-                    <button
-                      onClick={() => handleRetry(index)}
-                      className="text-yellow-500 hover:text-yellow-700 transition-colors"
-                    >
-                      Retry
-                    </button>
-                  )}
-                  <button
-                    onClick={() => handleCancel(index)}
-                    className="text-gray-400 hover:text-red-500 transition-colors"
-                    title="Remove"
-                  >
-                    Remove
-                  </button>
-                </div>
-              </div>
-            ))}
+          <div className="space-y-4">
+            <h4 className="font-medium text-gray-900 dark:text-gray-100">Upload Queue:</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {uploads.map((item, index) => (
+                <UploadQueueItem
+                  key={index}
+                  item={item}
+                  index={index}
+                  onRetry={handleRetry}
+                  onCancel={handleCancel}
+                  onProgressUpdate={handleProgressUpdate}
+                  onStatusUpdate={handleStatusUpdate}
+                />
+              ))}
+            </div>
             <button
               onClick={handleStartUpload}
-              className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition-colors duration-200 font-medium"
+              className={`w-full py-3 rounded-lg font-medium transition-colors duration-200 ${uploads.every(item => item.status !== 'queued') ? 'bg-gray-400 text-gray-200 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
               disabled={uploads.every(item => item.status !== 'queued')}
             >
-              Start Upload ({uploads.filter(item => item.status === 'queued').length} file{uploads.filter(item => item.status === 'queued').length !== 1 ? 's' : ''})
+              {uploads.some(item => item.status === 'processing')
+                ? 'Processing… Please wait'
+                : `Start Upload (${uploads.filter(item => item.status === 'queued').length} file${uploads.filter(item => item.status === 'queued').length !== 1 ? 's' : ''})`}
             </button>
           </div>
         )}
