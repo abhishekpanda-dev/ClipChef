@@ -5,10 +5,10 @@ interface FileUploadProps {
   onFileUpload: (files: File[]) => void;
 }
 
-const ACCEPTED_FORMATS = ['mp4', 'mov', 'avi', 'webm', 'mkv'];
+export const ACCEPTED_FORMATS = ['mp4', 'mov', 'avi', 'webm', 'mkv'];
 const MAX_SIZE_MB = 500;
 
-interface UploadFile {
+export interface UploadFile {
   file: File;
   status: 'queued' | 'uploading' | 'completed' | 'failed';
   progress: number;
